@@ -206,6 +206,20 @@
         /* New Feedback Style */
         .feedback-text { animation: fadeIn 0.5s ease-in; }
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* Multiplayer Lobby Styles */
+        #multiplayer-lobby-ui { width: 100%; display: flex; flex-direction: column; align-items: center; }
+        .room-code-display { font-size: 3rem; font-weight: 900; color: #08d9d6; letter-spacing: 5px; margin: 10px 0; font-family: monospace; text-shadow: 0 0 20px rgba(8, 217, 214, 0.4); }
+        .player-list { width: 300px; background: rgba(255,255,255,0.05); border-radius: 12px; padding: 20px; margin-bottom: 20px; max-height: 200px; overflow-y: auto; }
+        .player-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.1); color: #ccc; }
+        .player-item.host { color: #ffde7d; font-weight: bold; }
+        .player-item i { margin-right: 8px; }
+        
+        #mp-countdown {
+            position: absolute; inset: 0; display: flex; justify-content: center; align-items: center;
+            font-size: 10rem; font-weight: 900; color: #fff; z-index: 200; pointer-events: none;
+            text-shadow: 0 0 40px #08d9d6;
+        }
     </style>
 </head>
 <body>
@@ -215,6 +229,7 @@
         <div id="overdrive-overlay"></div>
         <div id="pressure-overlay"></div>
         <div id="combo-display">COMBO x2</div>
+        <div id="mp-countdown" class="hidden">3</div>
         
         <!-- Strategic Choice UI -->
         <div id="choice-overlay">
@@ -257,7 +272,7 @@
                     </div>
                     <div id="battle-hud">
                         <div class="flex justify-between text-xs font-bold text-gray-400 uppercase">
-                            <span>You</span>
+                            <span id="player-name-hud">You</span>
                             <span id="rival-name-display">Rival</span>
                         </div>
                         <div class="rival-bar-bg">
@@ -370,17 +385,37 @@
             <button class="btn btn-outline" id="btn-st-back">Back</button>
         </div>
 
-        <!-- 4. Multiplayer Lobby -->
+        <!-- 4. Multiplayer Lobby (MODIFIED) -->
         <div id="lobby-screen" class="overlay-screen hidden">
-            <h2 class="text-4xl font-bold mb-6 text-white">MULTIPLAYER LOBBY</h2>
-            <input type="text" id="player-name" class="lobby-input" placeholder="Your Nickname" maxlength="12">
-            <input type="text" id="room-code-input" class="lobby-input hidden" placeholder="6-Digit Code" maxlength="6">
-            <div id="lobby-controls">
-                <button class="btn btn-blue" id="btn-match">Quick Match</button>
-                <button class="btn btn-outline" id="btn-join">Join Room</button>
-                <button class="btn btn-outline" id="btn-create">Create Room</button>
+            <h2 class="text-4xl font-bold mb-2 text-white">MULTIPLAYER LOBBY</h2>
+            <p class="text-gray-400 mb-6 text-sm">Play with friends in separate tabs</p>
+            
+            <!-- Setup Phase -->
+            <div id="lobby-setup">
+                <input type="text" id="player-name" class="lobby-input" placeholder="Your Nickname" maxlength="12">
+                <input type="text" id="room-code-input" class="lobby-input hidden" placeholder="Enter Room Code" maxlength="6">
+                
+                <div id="lobby-controls">
+                    <button class="btn btn-blue" id="btn-create">Create Room</button>
+                    <button class="btn btn-outline" id="btn-join">Join Room</button>
+                </div>
             </div>
-            <div id="lobby-status" class="hidden text-xl text-[#08d9d6] font-mono mt-4 animate-pulse"></div>
+
+            <!-- Inside Room Phase -->
+            <div id="multiplayer-lobby-ui" class="hidden">
+                <div class="text-xs text-gray-500 uppercase font-bold tracking-widest">ROOM CODE</div>
+                <div id="lobby-room-code" class="room-code-display">------</div>
+                
+                <div class="player-list" id="lobby-player-list">
+                    <!-- Players injected here -->
+                </div>
+
+                <div id="lobby-status-text" class="text-[#ffde7d] font-mono mb-4 animate-pulse">Waiting for host...</div>
+
+                <button class="btn hidden" id="btn-mp-start">START MATCH</button>
+                <button class="btn btn-outline text-xs py-2 mt-2" id="btn-mp-add-bot" title="For testing alone">Add Bot (Test)</button>
+            </div>
+            
             <button class="btn btn-outline mt-8 text-sm py-2" id="btn-lobby-back">Back</button>
         </div>
 
@@ -502,9 +537,35 @@
             'HARD': { speedMod: 1.3, baseColors: 5, lives: 1 }
         };
 
+        // --- HELPER: Robust Stats Loading ---
+        function getSafeStats() {
+            const defaults = { 
+                games: 0, 
+                wins: 0, 
+                losses: 0, 
+                blocks: 0, 
+                bestScore: 0, 
+                maxCombo: 0, 
+                maxLevel: 1 
+            };
+            try {
+                const s = JSON.parse(localStorage.getItem('hextris_stats'));
+                if (s && typeof s === 'object') {
+                    // Merge defaults to ensure no fields are NaN/undefined
+                    return { ...defaults, ...s };
+                }
+            } catch(e) {
+                console.warn("Stats corrupted, resetting safe defaults", e);
+            }
+            return defaults;
+        }
+
         let state = {
             score: 0,
-            currency: parseInt(localStorage.getItem('hextris_currency') || '100'),
+            currency: (function() {
+                const c = parseInt(localStorage.getItem('hextris_currency'));
+                return isNaN(c) ? 100 : c;
+            })(),
             lives: 3,
             level: 1,
             mode: 'CLASSIC', 
@@ -558,10 +619,10 @@
             
             visualSides: 6, // NEW: Visual only
             
-            achievements: JSON.parse(localStorage.getItem('hextris_achievements') || '{}'),
-            stats: JSON.parse(localStorage.getItem('hextris_stats') || JSON.stringify({
-                games: 0, wins: 0, losses: 0, blocks: 0, bestScore: 0, maxCombo: 0, maxLevel: 0
-            }))
+            achievements: (function() {
+                try { return JSON.parse(localStorage.getItem('hextris_achievements') || '{}'); } catch(e) { return {}; }
+            })(),
+            stats: getSafeStats() // Initialize with safe loaded data
         };
 
         const ui = {
@@ -659,44 +720,62 @@
         }, {passive: true});
 
         // ========================================
-        // SAVE STATS & LEADERBOARD
+        // SAVE STATS & LEADERBOARD (STRICT FIX)
         // ========================================
         function saveStats(gameEndData) {
-            let loadedStats;
-            try {
-                loadedStats = JSON.parse(localStorage.getItem('hextris_stats'));
-                if (!loadedStats) throw new Error();
-            } catch (e) {
-                loadedStats = { games: 0, wins: 0, losses: 0, blocks: 0, bestScore: 0, maxCombo: 0, maxLevel: 0 };
-            }
+            // 1. Load latest stats from storage to ensure we don't overwrite other sessions
+            let loadedStats = getSafeStats();
             
-            loadedStats.games++;
-            loadedStats.blocks += state.blocksClearedSession;
-            loadedStats.maxCombo = Math.max(loadedStats.maxCombo, state.maxComboSession);
-            loadedStats.maxLevel = Math.max(loadedStats.maxLevel || 0, state.level);
+            // 2. Update Stats
+            loadedStats.games = (loadedStats.games || 0) + 1;
+            loadedStats.blocks = (loadedStats.blocks || 0) + (state.blocksClearedSession || 0);
+            loadedStats.maxCombo = Math.max((loadedStats.maxCombo || 0), (state.maxComboSession || 0));
+            loadedStats.maxLevel = Math.max((loadedStats.maxLevel || 1), (state.level || 1));
             
             let isNewBest = false;
-            if (gameEndData.score > loadedStats.bestScore) {
+            // Only update best score if current score is higher
+            if (gameEndData.score > (loadedStats.bestScore || 0)) {
                 loadedStats.bestScore = gameEndData.score;
                 isNewBest = true;
-                document.getElementById('personal-best-menu').innerText = `BEST: ${loadedStats.bestScore}`;
+                // Update Main Menu "Best" display immediately
+                const pbMenu = document.getElementById('personal-best-menu');
+                if(pbMenu) pbMenu.innerText = `BEST: ${loadedStats.bestScore}`;
             }
             
-            if (gameEndData.result === 'VICTORY' || (state.mode === 'CLASSIC' && state.level >= 5)) loadedStats.wins++;
-            else loadedStats.losses++;
+            if (gameEndData.result === 'VICTORY' || (state.mode === 'CLASSIC' && state.level >= 5)) {
+                loadedStats.wins = (loadedStats.wins || 0) + 1;
+            } else {
+                loadedStats.losses = (loadedStats.losses || 0) + 1;
+            }
 
+            // 3. Save updated Stats back to localStorage
             state.stats = loadedStats;
-            localStorage.setItem('hextris_stats', JSON.stringify(loadedStats));
-            localStorage.setItem('hextris_currency', state.currency.toString());
+            try {
+                localStorage.setItem('hextris_stats', JSON.stringify(loadedStats));
+                localStorage.setItem('hextris_currency', state.currency.toString());
+            } catch(e) { console.error("Stats save failed", e); }
 
-            const lbKey = `hextris_lb_${state.mode || 'CLASSIC'}`;
+            // 4. Determine Leaderboard Key
+            let lbKey = 'hextris_lb_CLASSIC';
+            if (state.mode === 'TIMER') lbKey = 'hextris_lb_TIMER';
+            else if (state.mode === 'BATTLE') lbKey = 'hextris_lb_BATTLE';
+            else if (state.mode === 'MULTIPLAYER_REAL') lbKey = 'hextris_lb_MULTIPLAYER';
+
+            // 5. Load specific leaderboard
             let lbData = [];
-            try { lbData = JSON.parse(localStorage.getItem(lbKey) || '[]'); } catch(e) {}
+            try { 
+                lbData = JSON.parse(localStorage.getItem(lbKey) || '[]'); 
+                if (!Array.isArray(lbData)) lbData = [];
+            } catch(e) { lbData = []; }
 
             state.lastGameId = Date.now().toString();
+            let pName = state.playerName;
+            if (!pName || pName.trim() === '') pName = 'Player';
+
+            // 6. Add new entry
             const entry = {
                 id: state.lastGameId,
-                name: state.playerName || 'Player',
+                name: pName,
                 score: gameEndData.score,
                 level: state.level,
                 maxCombo: state.maxComboSession,
@@ -705,18 +784,32 @@
             };
             
             lbData.push(entry);
+            // Sort Descending by Score
             lbData.sort((a,b) => b.score - a.score);
+            // Keep top 10
             lbData = lbData.slice(0, 10);
-            localStorage.setItem(lbKey, JSON.stringify(lbData));
+            
+            // 7. Save Leaderboard
+            try {
+                localStorage.setItem(lbKey, JSON.stringify(lbData));
+            } catch(e) { console.error("LB save failed", e); }
 
+            // 8. Visual Badge Updates
             const top3 = lbData.slice(0, 3);
             const inTop3 = top3.some(e => e.id === state.lastGameId);
 
-            if (isNewBest) document.getElementById('new-best-badge').classList.remove('hidden');
-            else document.getElementById('new-best-badge').classList.add('hidden');
+            const badgeBest = document.getElementById('new-best-badge');
+            const badgeTop3 = document.getElementById('top-3-badge');
 
-            if (inTop3) document.getElementById('top-3-badge').classList.remove('hidden');
-            else document.getElementById('top-3-badge').classList.add('hidden');
+            if (badgeBest) {
+                if (isNewBest) badgeBest.classList.remove('hidden');
+                else badgeBest.classList.add('hidden');
+            }
+
+            if (badgeTop3) {
+                if (inTop3) badgeTop3.classList.remove('hidden');
+                else badgeTop3.classList.add('hidden');
+            }
         }
 
         function getSkillRank(score) {
@@ -754,7 +847,10 @@
             // Load Data
             const lbKey = `hextris_lb_${mode}`;
             let lbData = [];
-            try { lbData = JSON.parse(localStorage.getItem(lbKey) || '[]'); } catch(e) {}
+            try { 
+                lbData = JSON.parse(localStorage.getItem(lbKey) || '[]'); 
+                if (!Array.isArray(lbData)) lbData = [];
+            } catch(e) { lbData = []; }
             
             const tbody = document.getElementById('leaderboard-body');
             if (lbData.length === 0) {
@@ -786,13 +882,9 @@
         function showStats() {
             playClick(); closeAllScreens();
             ui.statsScreen.classList.remove('hidden');
-            let currentStats;
-            try {
-                currentStats = JSON.parse(localStorage.getItem('hextris_stats'));
-                if(!currentStats) throw new Error();
-            } catch(e) {
-                currentStats = state.stats;
-            }
+            
+            // Always reload stats from storage to get latest
+            const currentStats = getSafeStats();
             
             document.getElementById('stat-games').innerText = currentStats.games;
             document.getElementById('stat-wins').innerText = currentStats.wins;
@@ -844,9 +936,12 @@
         document.getElementById('diff-easy').onclick = () => setDifficulty('EASY');
         document.getElementById('diff-medium').onclick = () => setDifficulty('MEDIUM');
         document.getElementById('diff-hard').onclick = () => setDifficulty('HARD');
-        document.getElementById('btn-match').onclick = findMatch;
-        document.getElementById('btn-create').onclick = createRoom;
-        document.getElementById('btn-join').onclick = enableRoomInput;
+        
+        // --- MULTIPLAYER BINDINGS (MODIFIED) ---
+        document.getElementById('btn-create').onclick = createRoomReal;
+        document.getElementById('btn-join').onclick = joinRoomReal;
+        document.getElementById('btn-mp-start').onclick = startMultiplayerCountdown;
+        document.getElementById('btn-mp-add-bot').onclick = addBotToLobby;
 
         window.applyChoice = function(choice) {
             playClick(); state.choicePending = false; ui.choiceOverlay.classList.remove('active');
@@ -869,10 +964,169 @@
             } else { SFX.error(); showNotification("NOT ENOUGH COINS"); }
         }
 
-        function openLobby() { closeAllScreens(); ui.lobbyScreen.classList.remove('hidden'); document.getElementById('lobby-controls').classList.remove('hidden'); document.getElementById('lobby-status').classList.add('hidden'); document.getElementById('room-code-input').classList.add('hidden'); }
-        function enableRoomInput() { playClick(); document.getElementById('room-code-input').classList.remove('hidden'); document.getElementById('room-code-input').focus(); }
-        function findMatch() { playClick(); const name = document.getElementById('player-name').value || 'Guest'; state.playerName = name; document.getElementById('lobby-controls').classList.add('hidden'); document.getElementById('lobby-status').classList.remove('hidden'); document.getElementById('lobby-status').innerText = "Searching for players..."; setTimeout(() => { const opponents = ["HexMaster99", "PolygonSlayer", "GridRunner"]; const opp = opponents[Math.floor(Math.random() * opponents.length)]; document.getElementById('lobby-status').innerText = `Match Found: VS ${opp}`; ui.rivalNameDisplay.innerText = opp; setTimeout(() => startGame('BATTLE'), 1500); }, 2000); }
-        function createRoom() { playClick(); const name = document.getElementById('player-name').value || 'Host'; state.playerName = name; document.getElementById('lobby-controls').classList.add('hidden'); document.getElementById('lobby-status').classList.remove('hidden'); const roomCode = Math.floor(100000 + Math.random() * 900000); document.getElementById('lobby-status').innerText = `Room Code: ${roomCode}\nWaiting for players...`; setTimeout(() => { document.getElementById('lobby-status').innerText = `Player Joined!\nStarting Game...`; ui.rivalNameDisplay.innerText = "Guest_" + Math.floor(Math.random()*100); setTimeout(() => startGame('BATTLE'), 1500); }, 3000); }
+        // ==========================================
+        // MULTIPLAYER LOGIC (BROADCAST CHANNEL)
+        // ==========================================
+        const bc = new BroadcastChannel('hextris_multiplayer_channel');
+        
+        let mpState = {
+            roomID: null,
+            isHost: false,
+            myID: null,
+            players: [], // { id, name, isHost, score }
+            inLobby: false,
+            gameStarted: false
+        };
+
+        bc.onmessage = (event) => {
+            const data = event.data;
+            if (data.type === 'JOIN_REQUEST') {
+                if (mpState.isHost && mpState.inLobby && data.roomID === mpState.roomID) {
+                    const newPlayer = { id: data.id, name: data.name, isHost: false, score: 0 };
+                    mpState.players.push(newPlayer);
+                    broadcastLobbyUpdate();
+                    SFX.match();
+                }
+            } else if (data.type === 'LOBBY_UPDATE') {
+                if (!mpState.isHost && data.roomID === mpState.roomID) {
+                    mpState.players = data.players;
+                    updateLobbyUI();
+                }
+            } else if (data.type === 'START_GAME') {
+                if (data.roomID === mpState.roomID) {
+                    mpState.gameStarted = true;
+                    beginCountdown();
+                }
+            } else if (data.type === 'SCORE_UPDATE') {
+                if (state.mode === 'MULTIPLAYER_REAL' && data.roomID === mpState.roomID && data.id !== mpState.myID) {
+                    // Update rival score for HUD
+                    state.rivalScore = 0; // Visual bar handled by battle logic, here we just show number
+                    state.rivalRawScore = data.score;
+                    updateUI();
+                }
+            }
+        };
+
+        function openLobby() { 
+            closeAllScreens(); 
+            ui.lobbyScreen.classList.remove('hidden'); 
+            document.getElementById('lobby-setup').classList.remove('hidden');
+            document.getElementById('multiplayer-lobby-ui').classList.add('hidden');
+            mpState = { roomID: null, isHost: false, myID: 'player_' + Math.floor(Math.random()*100000), players: [], inLobby: false, gameStarted: false };
+        }
+
+        function createRoomReal() {
+            playClick();
+            const name = document.getElementById('player-name').value || 'Host';
+            mpState.isHost = true;
+            mpState.roomID = Math.floor(100000 + Math.random() * 900000).toString();
+            mpState.players = [{ id: mpState.myID, name: name + " (YOU)", isHost: true, score: 0 }];
+            mpState.inLobby = true;
+            state.playerName = name;
+            
+            setupLobbyUI();
+        }
+
+        function joinRoomReal() {
+            playClick();
+            const inputCode = document.getElementById('room-code-input');
+            if (inputCode.classList.contains('hidden')) {
+                inputCode.classList.remove('hidden');
+                inputCode.focus();
+                return;
+            }
+            
+            const code = inputCode.value;
+            const name = document.getElementById('player-name').value || 'Guest';
+            if (code.length !== 6) return;
+
+            mpState.isHost = false;
+            mpState.roomID = code;
+            mpState.inLobby = true;
+            state.playerName = name;
+            
+            // Send Join Request
+            bc.postMessage({ type: 'JOIN_REQUEST', roomID: code, id: mpState.myID, name: name });
+            
+            setupLobbyUI();
+            document.getElementById('lobby-status-text').innerText = "Connecting to Room...";
+        }
+
+        function setupLobbyUI() {
+            document.getElementById('lobby-setup').classList.add('hidden');
+            document.getElementById('multiplayer-lobby-ui').classList.remove('hidden');
+            document.getElementById('lobby-room-code').innerText = mpState.roomID;
+            
+            if (mpState.isHost) {
+                document.getElementById('btn-mp-start').classList.remove('hidden');
+                document.getElementById('btn-mp-add-bot').classList.remove('hidden');
+                document.getElementById('lobby-status-text').innerText = "Waiting for players to join...";
+            } else {
+                document.getElementById('btn-mp-start').classList.add('hidden');
+                document.getElementById('btn-mp-add-bot').classList.add('hidden');
+                document.getElementById('lobby-status-text').innerText = "Waiting for host to start...";
+            }
+            updateLobbyUI();
+        }
+
+        function updateLobbyUI() {
+            const list = document.getElementById('lobby-player-list');
+            list.innerHTML = '';
+            mpState.players.forEach(p => {
+                const isMe = p.id === mpState.myID;
+                list.innerHTML += `
+                    <div class="player-item ${p.isHost ? 'host' : ''}">
+                        <span><i class="fas ${p.isHost ? 'fa-crown' : 'fa-user'}"></i> ${p.name} ${isMe ? '(YOU)' : ''}</span>
+                        <span>ready</span>
+                    </div>
+                `;
+            });
+            
+            // If I am guest and joined successfully
+            if (!mpState.isHost && mpState.players.length > 0) {
+                 document.getElementById('lobby-status-text').innerText = "Connected! Waiting for Host...";
+            }
+        }
+
+        function broadcastLobbyUpdate() {
+            bc.postMessage({ type: 'LOBBY_UPDATE', roomID: mpState.roomID, players: mpState.players });
+            updateLobbyUI();
+        }
+
+        function startMultiplayerCountdown() {
+            if (!mpState.isHost) return;
+            playClick();
+            bc.postMessage({ type: 'START_GAME', roomID: mpState.roomID });
+            beginCountdown();
+        }
+        
+        function addBotToLobby() {
+            const botName = "Bot_" + Math.floor(Math.random()*100);
+            mpState.players.push({ id: 'bot_'+Date.now(), name: botName, isHost: false, score: 0 });
+            broadcastLobbyUpdate();
+            SFX.match();
+        }
+
+        function beginCountdown() {
+            closeAllScreens();
+            const cdEl = document.getElementById('mp-countdown');
+            cdEl.classList.remove('hidden');
+            let count = 3;
+            cdEl.innerText = count;
+            SFX.levelup(); // reused sound
+            
+            const int = setInterval(() => {
+                count--;
+                if (count > 0) {
+                    cdEl.innerText = count;
+                    SFX.levelup();
+                } else {
+                    clearInterval(int);
+                    cdEl.classList.add('hidden');
+                    startGame('MULTIPLAYER_REAL');
+                }
+            }, 1000);
+        }
 
         function startGame(mode) {
             playClick();
@@ -893,7 +1147,8 @@
             state.visualSides = 6; // Start standard
 
             const settings = DIFF_SETTINGS[state.difficulty];
-            state.gameSpeed = 2.0 * settings.speedMod; state.lives = settings.lives;
+            // --- PHYSICS CHANGE: Lower base speed from 2.0 to 1.3 ---
+            state.gameSpeed = 1.3 * settings.speedMod; state.lives = settings.lives;
             
             closeAllScreens(); ui.timer.classList.add('hidden'); ui.battleHud.style.display = 'none';
             ui.comboDisplay.classList.remove('active'); ui.overdriveOverlay.classList.remove('active');
@@ -910,7 +1165,21 @@
                 ui.timer.classList.remove('hidden');
             }
 
+            if (mode === 'MULTIPLAYER_REAL') {
+                // Use Battle HUD for real multiplayer
+                ui.battleHud.style.display = 'block'; 
+                state.rivalSpeed = 0; // Handled by real updates
+                ui.rivalStatus.innerText = "VS REAL PLAYER";
+                
+                // Find opponent name
+                const opp = mpState.players.find(p => p.id !== mpState.myID);
+                if (opp) ui.rivalNameDisplay.innerText = opp.name;
+                document.getElementById('player-name-hud').innerText = state.playerName;
+            }
+
+            // Old fake battle logic
             if (mode === 'BATTLE') { ui.battleHud.style.display = 'block'; state.rivalSpeed = settings.speedMod; state.battleGraceTime = 3.0; ui.rivalStatus.innerText = "READY..."; }
+            
             state.lastTime = performance.now(); updateUI();
         }
 
@@ -1010,7 +1279,8 @@
 
         function levelUp() {
             state.level++;
-            state.gameSpeed += 0.2;
+            // --- PHYSICS CHANGE: Lower increment from 0.2 to 0.05 ---
+            state.gameSpeed += 0.05;
             state.score += 1000; // Bonus
             state.currency += 50; 
             
@@ -1034,6 +1304,12 @@
 
         function update(dt) {
             if (state.paused) return;
+
+            // Broadcast score in real multiplayer
+            if (state.mode === 'MULTIPLAYER_REAL' && state.status === 'PLAYING') {
+                // Throttle this slightly in production, but okay for local
+                bc.postMessage({ type: 'SCORE_UPDATE', roomID: mpState.roomID, id: mpState.myID, score: state.score });
+            }
 
             if (state.choicePending) {
                 state.choiceTimer -= dt;
@@ -1091,7 +1367,9 @@
 
             state.spawnTimer += dt * 1000;
             let effectiveLevel = state.level + (state.isPressureMode ? 2 : 0) + state.mistakeStreak;
-            let interval = Math.max(400, 1600 - (effectiveLevel * 150));
+            
+            // --- PHYSICS CHANGE: Slower spawn ramp (1800 - 100*lvl vs 1600 - 150*lvl) ---
+            let interval = Math.max(500, 1800 - (effectiveLevel * 100));
             if (state.isOverdrive) interval = 200; if (state.slowTimeActive) interval *= 2;
 
             if (state.status === 'PLAYING' && state.spawnTimer > interval) { spawnBlock(); state.spawnTimer = 0; }
@@ -1122,7 +1400,8 @@
 
             for (let i = state.blocks.length - 1; i >= 0; i--) {
                 const b = state.blocks[i]; 
-                let speedMult = 1 + (state.level * 0.1);
+                // --- PHYSICS CHANGE: Lower multiplier per level (0.05 vs 0.1) ---
+                let speedMult = 1 + (state.level * 0.05);
                 if (state.slowTimeActive) speedMult *= 0.5;
                 if (state.mistakeStreak > 0) speedMult += (state.mistakeStreak * 0.2); 
 
@@ -1164,6 +1443,9 @@
             state.status = 'GAMEOVER';
             let result = 'GAME OVER';
             if (state.mode === 'BATTLE') result = (state.score > state.rivalRawScore) ? 'VICTORY' : 'DEFEAT';
+            // Simple logic for real multiplayer result
+            if (state.mode === 'MULTIPLAYER_REAL') result = (state.score > state.rivalRawScore) ? 'VICTORY' : 'DEFEAT';
+
             saveStats({ score: state.score, result: result });
             document.getElementById('summary-title').innerText = result;
             if (result === 'VICTORY') createParticles(window.innerWidth/2, window.innerHeight/2, '#08d9d6');
@@ -1204,10 +1486,27 @@
                 if(state.levelTimeLeft <= 3 && state.levelTimeLeft > 0) ui.timer.style.color = "#ff2e63"; else ui.timer.style.color = "white";
             }
 
-            if (state.mode === 'BATTLE') {
-                ui.rivalBar.style.width = `${Math.min(100, Math.max(0, state.rivalScore))}%`;
-                ui.playerScoreSmall.innerText = `YOU: ${state.score}`; ui.rivalScoreSmall.innerText = `RIVAL: ${Math.floor(state.rivalRawScore)}`;
-                ui.rivalBar.parentElement.style.boxShadow = state.rivalScore > 80 ? "0 0 10px red" : "none";
+            if (state.mode === 'BATTLE' || state.mode === 'MULTIPLAYER_REAL') {
+                // Determine bar width based on who is winning
+                // 50% is even. 
+                // If You have 200, Rival 100, Total 300. You have 66%. 
+                let total = state.score + state.rivalRawScore;
+                let pct = 50;
+                if (total > 0) pct = (state.score / total) * 100;
+                
+                // For Fake Battle, use the old Rival Bar logic (damage based)
+                if (state.mode === 'BATTLE') {
+                    ui.rivalBar.style.width = `${Math.min(100, Math.max(0, state.rivalScore))}%`;
+                    ui.playerScoreSmall.innerText = `YOU: ${state.score}`; ui.rivalScoreSmall.innerText = `RIVAL: ${Math.floor(state.rivalRawScore)}`;
+                    ui.rivalBar.parentElement.style.boxShadow = state.rivalScore > 80 ? "0 0 10px red" : "none";
+                } 
+                else if (state.mode === 'MULTIPLAYER_REAL') {
+                    // Reuse the bar for Score Comparison in Real MP
+                    // We don't have "damage" bar in real MP yet, just score comparison
+                    ui.rivalBar.style.width = '0%'; // Hide damage bar
+                    ui.playerScoreSmall.innerText = `YOU: ${state.score}`; 
+                    ui.rivalScoreSmall.innerText = `RIVAL: ${state.rivalRawScore}`;
+                }
             }
         }
 
