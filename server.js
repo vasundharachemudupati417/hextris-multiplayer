@@ -1,63 +1,52 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const path = require("path");
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.static('public'));
+app.use(express.static(path.join(__dirname)));
 
 let rooms = {};
 
-io.on('connection', (socket) => {
-    console.log("User connected:", socket.id);
+io.on("connection", (socket) => {
 
-    socket.on('createRoom', (roomCode, playerName) => {
-        socket.join(roomCode);
-        rooms[roomCode] = {
-            players: [{ id: socket.id, name: playerName, score: 0 }]
-        };
-        socket.emit('roomCreated', roomCode);
+  socket.on("joinRoom", ({ roomID, playerName }) => {
+
+    socket.join(roomID);
+
+    if (!rooms[roomID]) rooms[roomID] = [];
+
+    rooms[roomID].push({
+      id: socket.id,
+      name: playerName,
+      score: 0
     });
 
-    socket.on('joinRoom', (roomCode, playerName) => {
-        if (rooms[roomCode]) {
-            socket.join(roomCode);
-            rooms[roomCode].players.push({
-                id: socket.id,
-                name: playerName,
-                score: 0
-            });
+    io.to(roomID).emit("roomUpdate", rooms[roomID]);
+  });
 
-            io.to(roomCode).emit('updatePlayers', rooms[roomCode].players);
-        } else {
-            socket.emit('errorMessage', "Room does not exist");
-        }
-    });
+  socket.on("scoreUpdate", ({ roomID, score }) => {
+    if (!rooms[roomID]) return;
 
-    socket.on('scoreUpdate', ({ roomCode, score }) => {
-        if (rooms[roomCode]) {
-            const player = rooms[roomCode].players.find(p => p.id === socket.id);
-            if (player) player.score = score;
+    rooms[roomID] = rooms[roomID].map(p =>
+      p.id === socket.id ? { ...p, score } : p
+    );
 
-            io.to(roomCode).emit('updatePlayers', rooms[roomCode].players);
-        }
-    });
+    socket.to(roomID).emit("opponentScore", score);
+  });
 
-    socket.on('disconnect', () => {
-        for (let roomCode in rooms) {
-            rooms[roomCode].players =
-                rooms[roomCode].players.filter(p => p.id !== socket.id);
-
-            io.to(roomCode).emit('updatePlayers', rooms[roomCode].players);
-        }
-    });
+  socket.on("disconnect", () => {
+    for (let roomID in rooms) {
+      rooms[roomID] = rooms[roomID].filter(p => p.id !== socket.id);
+      io.to(roomID).emit("roomUpdate", rooms[roomID]);
+    }
+  });
 });
 
-
-const PORT = process.env.PORT || 3000;
-
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
-    console.log("Server running on port " + PORT);
+  console.log("Server running on port", PORT);
 });
