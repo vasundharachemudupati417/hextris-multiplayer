@@ -1689,7 +1689,10 @@
         function main(now) {
             if (!state.lastTime) state.lastTime = now;
             const dt = Math.min(now - state.lastTime, 100) / 1000; state.lastTime = now;
-            if (state.status === 'PLAYING') {
+            if (state.status ===git add .
+git commit -m "Updated fixes"
+git push
+ 'PLAYING') {
                 update(dt);
                 updateUI(); // Updates timer visuals
             }
